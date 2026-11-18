@@ -638,6 +638,30 @@ function ancestorCommits(repo: Repo, tips: Iterable<string>): Set<string> {
   return seen;
 }
 
+/** Whether `ancestor` is reachable from `descendant` by following parents.
+ * Walks only until the ancestor is found (or the chain ends), so a
+ * fast-forward check on a long linear chain costs one step instead of a full
+ * history walk. Equivalent to `ancestorCommits(repo, [descendant]).has(ancestor)`,
+ * including for merges (it explores the reachable set only when the ancestor
+ * is genuinely absent) and non-commit oids (never reachable). */
+function isAncestor(repo: Repo, descendant: string, ancestor: string): boolean {
+  if (descendant === ancestor) return true;
+  const seen = new Set<string>();
+  const stack: string[] = [descendant];
+  while (stack.length > 0) {
+    const oid = stack.pop() as string;
+    if (oid === ancestor) return true;
+    if (seen.has(oid)) continue;
+    const obj = repo.objects.get(oid);
+    if (obj === undefined || obj.type !== 'commit') continue;
+    seen.add(oid);
+    for (const parent of parseCommit(obj.data).parents) {
+      if (!seen.has(parent)) stack.push(parent);
+    }
+  }
+  return false;
+}
+
 /** The merge-base of two tips: the common ancestor with the highest insertion sequence. */
 function mergeBase(repo: Repo, a: string, b: string): string | null {
   const aAnc = ancestorCommits(repo, [a]);
@@ -2063,8 +2087,9 @@ function handleReceivePack(req: http.IncomingMessage, res: http.ServerResponse, 
       continue;
     }
     if (!isTagRef && command.newOid !== command.oldOid) {
-      const ancestors = ancestorCommits(repo, [command.newOid]);
-      if (!ancestors.has(command.oldOid)) {
+      // Targeted walk: the old tip is the new commit's parent on a linear
+      // chain, so this is one step instead of a full history walk.
+      if (!isAncestor(repo, command.newOid, command.oldOid)) {
         results.push({ ref: command.ref, ok: false, reason: 'non-fast-forward' });
         continue;
       }
