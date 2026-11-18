@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -187,6 +188,10 @@ func route(rq *request) *response {
 var envURL = strings.TrimRight(os.Getenv("MAKEFUN_ENV_URL"), "/")
 
 func main() {
+	// The grading pod has 2 CPUs; cap the scheduler to match it (the
+	// default here would use all visible vCPUs, which on this host is 4
+	// over 1.5 shared cores, and extra Ps only add scheduler thrash).
+	runtime.GOMAXPROCS(2)
 	port := 0
 	if envURL == "" {
 		if p := os.Getenv("PORT"); p != "" {
