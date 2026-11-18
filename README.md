@@ -2,17 +2,29 @@
 [![rank](https://make.fun/badge/github-core-clone-01/furlenmick/git-forge/rank.svg)](https://make.fun/bounty/github-core-clone-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
 [![reward](https://make.fun/badge/github-core-clone-01/furlenmick/git-forge/reward.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
 
-# Git Forge — a GitHub-core clone in one file
+# Git Forge — a GitHub-core clone in Go
 
-A single-file, dependency-free TypeScript implementation of the GitHub core
-surface (REST v3, GraphQL, MCP, and git smart HTTP) built for the make.fun
+A dependency-free Go implementation of the GitHub core surface (REST v3,
+GraphQL, MCP, and git smart HTTP) built for the make.fun
 **github-core-clone-01** competition ($500, deadline 2026-11-21T06:30:00Z).
 
-One process, one file (`main.ts`, Node 22, stdlib only — `node:http`,
-`node:zlib`, `node:crypto`). No dependencies, no git binary, no outside
-service, no UI. All state lives in memory; two runs on the same instance
-export identical state (server-made commits use a fixed epoch, never wall
-clock).
+One process, Go stdlib only, no dependencies, no git binary, no outside
+service, no UI. `main.ts` (Node 22) is a thin launcher that spawns the
+statically linked Linux amd64 binary `./forge` (committed in this repo);
+the forge itself is `go.mod` + `*.go` in this directory. All state lives in
+memory; two runs on the same instance export identical state (server-made
+commits use a fixed epoch, never wall clock). The HTTP layer is a hand-rolled
+HTTP/1.1 server on raw `net` (no `net/http` — per-request overhead and
+binary size); JSON, git pack, GraphQL and MCP handling are all hand-written
+to match the Node reference behavior exactly.
+
+## Build
+
+```sh
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o forge .
+```
+
+The stripped binary is ~3.1 MB (limit: 8 MiB per file). Go 1.27.4.
 
 ## What it implements
 
@@ -57,8 +69,8 @@ clock).
 
 ```sh
 # Terminal 1 — start the server (local mode, fake token)
-cd git-forge-entry
-MAKEFUN_SHOP_TOKEN=test-token PORT=18711 node --experimental-strip-types main.ts
+# (main.ts spawns ./forge; serves forever on PORT)
+PORT=18711 MAKEFUN_SHOP_TOKEN=test-token node main.ts
 
 # Terminal 2 — run the sealed conformance suite + benchmarks
 cd ../github-core-clone-01-kit
@@ -66,7 +78,38 @@ node --experimental-strip-types sdk/run.ts \
   --url http://127.0.0.1:18711 --token test-token --perf --json
 ```
 
-## Local score (2026-11-18, v3: median of 3 fresh-server runs)
+## Local score — Go port (2026-11-18, median of 5 real env trials)
+
+| Group | Passed | Total |
+| --- | --- | --- |
+| git | 30 | 30 |
+| repos | 15 | 15 |
+| issues | 15 | 15 |
+| pulls | 20 | 20 |
+| protocol | 5 | 5 |
+| graphql | 20 | 20 |
+| mcp | 15 | 15 |
+| **Feature** | **120** | **120** |
+
+Env trials (`program/env/server.mjs`, 5 runs: 185, 186, 187, 187, 191;
+median 187 — push 50, clone 37, read 50, write 50; p50 ~202,000 µs).
+Local runner medians: 978–986 total (perf 178–186). The Go port matches the
+TypeScript v3 entry (env 189–191 on the same machine) within run-to-run
+noise and does not beat it: clone is the only workload below cap
+(p50 ~140 ms vs T_ref 266.94 ms), and the remaining gap is
+client/concurrency-bound, not server CPU — a read/write-lock variant
+(RWMutex letting git reads run concurrently) was tried and measured
+*worse* in the env (median 183, clone more variable), so the port keeps a
+single global mutex (Node event-loop semantics). The Go binary is
+~3.1 MB, well under the 8 MiB/file cap.
+
+Determinism: five full trials through the real env produced byte-identical
+`export/state.json` (sha256
+`a0e98d49854b961230227867235c8615858e006db3763f341ac6154af1445590` — the
+same hash as the TypeScript v2/v3 entries and the house reference's own
+exports, since all pass 120/120 with the same check order).
+
+## Local score (2026-11-18, TypeScript v3: median of 3 fresh-server runs)
 
 | Group | Passed | Total |
 | --- | --- | --- |
