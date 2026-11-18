@@ -66,7 +66,7 @@ node --experimental-strip-types sdk/run.ts \
   --url http://127.0.0.1:18711 --token test-token --perf --json
 ```
 
-## Local score (2026-11-18, v2: median of 3 fresh-server runs)
+## Local score (2026-11-18, v3: median of 3 fresh-server runs)
 
 | Group | Passed | Total |
 | --- | --- | --- |
@@ -83,23 +83,36 @@ node --experimental-strip-types sdk/run.ts \
 | --- | --- |
 | Feature (600 × 120/120) | 600 |
 | Agent-native (200 × 15/15 MCP) | 200 |
-| Performance (median of 3 runs) | 190 |
-| **Total** | **990 / 1000** |
+| Performance (median of 3 runs) | 188 |
+| **Total** | **988 / 1000** |
 
 Benchmarks (median p50 of 3 fresh-server runs vs house reference `T_ref`):
 
 | Workload | p50 | T_ref | Points |
 | --- | --- | --- | --- |
-| push (200 sequential pushes) | 456 ms | 1640.82 ms | 48 |
-| clone (50 concurrent shallow clones) | 93 ms | 266.94 ms | 44 |
-| read (2000 issue GETs, keep-alive) | 692 ms | 2759.72 ms | 50 |
-| write (200 issue creations) | 95 ms | 348.97 ms | 48 |
+| push (200 sequential pushes) | 351 ms | 1640.82 ms | 50 |
+| clone (50 concurrent shallow clones) | 110 ms | 266.94 ms | 41 |
+| read (2000 issue GETs, keep-alive) | 602 ms | 2759.72 ms | 50 |
+| write (200 issue creations) | 111 ms | 348.97 ms | 46 |
 
+v3's only code change is a targeted fast-forward ancestor check
+(`isAncestor` walks from the new commit until the old tip is found, instead
+of `ancestorCommits` walking the whole history on every push). Push p50 fell
+456 → 351 ms in the runner and 449 → 306 ms (median of 3 runs) in the real
+env trial; the other workloads moved within run-to-run noise. A CPU profile
+of the v2 entry showed the full-history walk was 426 ms of the trial's
+receive-pack time (54% of that handler) — the one algorithmic cost in the
+bench workloads; read/write handlers were already at the HTTP+client floor
+(65/117 µs per request, matching a minimal stub server), and the clone
+workload is client/concurrency-bound, so no further server-side change had a
+measurable payoff.
+
+v2 medians were 990 total (perf 190; push 48, clone 44, read 50, write 48);
 v1 medians were 988 total (perf 188; push 41, clone 48, read 50, write 49).
-v2's only code change is single-inflate pack parsing (`inflateSync` with
-`info:true` reports the consumed bytes, replacing the binary search in
-`deflateLength`); it gained ~7 push points with zero check regressions.
-Clone/write/read medians moved within run-to-run noise on this VM.
+On the practice board v2 scored 922 (perf 122); v3's push cut is worth
+about +7 board points (log scale: −32% time), so v3 should land near 129 —
+still below the rank-20 line (~955), which would need a ~2.5× geomean
+speedup that no stdlib-Node tuning reaches against Go entries.
 
 Determinism: two full trials through the real env (`program/env/server.mjs`,
 different state dirs and ports) produced byte-identical
