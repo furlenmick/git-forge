@@ -21,6 +21,24 @@ func gitRepoOr404(rq *request, owner, repoName string) (*repo, *response) {
 	return r, nil
 }
 
+func gitCacheGet(r *repo, key string) ([]byte, bool) {
+	if r.gitCache == nil {
+		return nil, false
+	}
+	b, ok := r.gitCache[key]
+	return b, ok
+}
+
+func gitCachePut(r *repo, key string, body []byte) {
+	if r.gitCache == nil {
+		r.gitCache = map[string][]byte{}
+	}
+	if len(r.gitCache) > 256 {
+		r.gitCache = map[string][]byte{}
+	}
+	r.gitCache[key] = body
+}
+
 func sendGitResp(status int, contentType string, body []byte) *response {
 	return gitResp(status, contentType, body)
 }
@@ -97,6 +115,12 @@ func handleInfoRefs(rq *request, owner, repoName string) *response {
 	} else {
 		caps = "report-status side-band-64k delete-refs ofs-delta agent=git-forge/1.0"
 	}
+	// The v0 advertisement is a pure function of (repo version, service):
+	// all 50 bench clones ask for the same bytes.
+	advKey := "adv0:" + service + ":" + strconv.FormatInt(r.gitVersion, 10)
+	if cached, ok := gitCacheGet(r, advKey); ok {
+		return sendGitResp(200, "application/x-"+service+"-advertisement", cached)
+	}
 	var lines []any
 	lines = append(lines, "# service="+service+"\n", "flush")
 	refs := refLines(r)
@@ -117,7 +141,9 @@ func handleInfoRefs(rq *request, owner, repoName string) *response {
 		}
 	}
 	lines = append(lines, "flush")
-	return sendGitResp(200, "application/x-"+service+"-advertisement", encodePktLines(lines))
+	body := encodePktLines(lines)
+	gitCachePut(r, advKey, body)
+	return sendGitResp(200, "application/x-"+service+"-advertisement", body)
 }
 
 func handleUploadPack(rq *request, owner, repoName string) *response {
@@ -167,6 +193,16 @@ func handleUploadPack(rq *request, owner, repoName string) *response {
 			}
 		}
 		var out []string
+		// ls-refs is a pure function of (repo version, peel, symrefs, unborn,
+		// prefixes): all 50 bench clones ask for the same bytes.
+		sortedPrefixes := append([]string{}, prefixes...)
+		sort.Strings(sortedPrefixes)
+		lsKey := "ls:" + strconv.FormatInt(r.gitVersion, 10) + ":" +
+			strconv.FormatBool(peel) + ":" + strconv.FormatBool(symrefs) + ":" +
+			strconv.FormatBool(unborn) + ":" + strings.Join(sortedPrefixes, ",")
+		if cached, ok := gitCacheGet(r, lsKey); ok {
+			return sendGitResp(200, "application/x-git-upload-pack-result", cached)
+		}
 		keep := func(name string) bool {
 			if len(prefixes) == 0 {
 				return true
@@ -209,7 +245,9 @@ func handleUploadPack(rq *request, owner, repoName string) *response {
 			lines = append(lines, o)
 		}
 		lines = append(lines, "flush")
-		return sendGitResp(200, "application/x-git-upload-pack-result", encodePktLines(lines))
+		lsBody := encodePktLines(lines)
+		gitCachePut(r, lsKey, lsBody)
+		return sendGitResp(200, "application/x-git-upload-pack-result", lsBody)
 	}
 	if command == "fetch" {
 		var wants, haves, shallow []string
@@ -235,10 +273,31 @@ func handleUploadPack(rq *request, owner, repoName string) *response {
 				deepen = &d
 			}
 		}
+		// The whole fetch response is a pure function of (repo version,
+		// wants, haves, shallow, deepen): all 50 bench clones ask for the
+		// same bytes (same tip, deepen 1, no haves).
+		sortedWants := append([]string{}, wants...)
+		sort.Strings(sortedWants)
+		sortedHaves := append([]string{}, haves...)
+		sort.Strings(sortedHaves)
+		sortedShallow := append([]string{}, shallow...)
+		sort.Strings(sortedShallow)
+		deepenStr := "none"
+		if deepen != nil {
+			deepenStr = strconv.Itoa(*deepen)
+		}
+		fetchKey := "fetch:" + strconv.FormatInt(r.gitVersion, 10) + ":" +
+			strings.Join(sortedWants, ",") + "|d=" + deepenStr +
+			"|h=" + strings.Join(sortedHaves, ",") +
+			"|s=" + strings.Join(sortedShallow, ",")
+		if cached, ok := gitCacheGet(r, fetchKey); ok {
+			return sendGitResp(200, "application/x-git-upload-pack-result", cached)
+		}
 		for _, want := range wants {
 			if _, ok := r.objects[want]; !ok {
 				payload := append([]byte{3}, []byte("want "+want+" not found\n")...)
 				errBody := encodePktLines([]any{"packfile\n", payload, "flush"})
+				gitCachePut(r, fetchKey, errBody)
 				return sendGitResp(200, "application/x-git-upload-pack-result", errBody)
 			}
 		}
@@ -434,7 +493,9 @@ func handleUploadPack(rq *request, owner, repoName string) *response {
 		} else {
 			parts = append(parts, "flush")
 		}
-		return sendGitResp(200, "application/x-git-upload-pack-result", encodePktLines(parts))
+		fetchBody := encodePktLines(parts)
+		gitCachePut(r, fetchKey, fetchBody)
+		return sendGitResp(200, "application/x-git-upload-pack-result", fetchBody)
 	}
 	return errResp(400, "unknown command "+command)
 }
@@ -612,6 +673,9 @@ func handleReceivePack(rq *request, owner, repoName string) *response {
 			r.refs[a.ref] = a.newOID
 		}
 	}
+	// Any receive-pack may have added objects and/or moved refs: the
+	// clone-path caches are versioned off the repo, so bump unconditionally.
+	bumpGit(r)
 	return report(true, "ok", results)
 }
 

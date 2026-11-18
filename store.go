@@ -189,6 +189,11 @@ type repo struct {
 	nextNumber    int
 	nextCommentID int
 	createdSeq    int
+	// gitVersion bumps on every refs/objects mutation; gitCache holds
+	// whole clone-path response bodies keyed by (version + request params).
+	// The cache is only read/written under reqMu, so no extra locking.
+	gitVersion int64
+	gitCache   map[string][]byte
 }
 
 var repos = map[string]*repo{}
@@ -236,10 +241,16 @@ func viewerRepos() []*repo {
 	return out
 }
 
+func bumpGit(r *repo) {
+	r.gitVersion++
+	r.gitCache = nil
+}
+
 func storeObject(r *repo, typ string, data []byte) string {
 	oid := hashObject(typ, data)
 	if _, ok := r.objects[oid]; !ok {
 		r.objects[oid] = &gitObject{typ: typ, data: data}
+		bumpGit(r)
 	}
 	return oid
 }
@@ -481,6 +492,7 @@ func commitFileChange(r *repo, branch, path string, content []byte, hasContent b
 	data := buildCommit(newTree, parents, message, timestamp, author)
 	oid := storeCommit(r, data)
 	r.refs["refs/heads/"+branch] = oid
+	bumpGit(r)
 	return oid
 }
 

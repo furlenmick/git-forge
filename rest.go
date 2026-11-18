@@ -508,6 +508,7 @@ func handleCreateRef(rq *request, owner, name string) *response {
 		return errResp(422, "Validation Failed: Reference already exists")
 	}
 	r.refs[ref] = sha
+	bumpGit(r)
 	return jsonResp(201, JObjV(
 		JF("ref", JStrV(ref)),
 		JF("object", JObjV(JF("sha", JStrV(sha)), JF("type", JStrV("commit")))),
@@ -1183,6 +1184,7 @@ func doMerge(r *repo, p *pull) (string, bool, string) {
 	data := buildCommit(newTree, []string{baseTip}, p.title, timestamp, author)
 	sha := storeCommit(r, data)
 	r.refs["refs/heads/"+p.base] = sha
+	bumpGit(r)
 	p.state = "closed"
 	p.merged = true
 	p.mergedAt = fixedISO
