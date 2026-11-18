@@ -334,10 +334,25 @@ interface PackReadResult {
 }
 
 /**
- * The exact end of the zlib stream starting at `start` (inflateSync ignores
- * trailing bytes and throws on truncation, so the length is binary-searched).
+ * The exact end of the zlib stream starting at `start`. One inflate gives
+ * both the data and the end: inflateSync with info:true reports the bytes
+ * the engine consumed in engine.bytesWritten (verified: exact on random
+ * data, 0–64 KiB, stored blocks, exact end and trailing junk). The old
+ * binary search is kept as a fallback if that ever looks wrong.
  */
 function deflateLength(pack: Buffer, start: number, limit: number): { data: Buffer; end: number } {
+  try {
+    const out = inflateSync(pack.subarray(start, limit), { info: true }) as unknown as {
+      buffer: Buffer;
+      engine: { bytesWritten?: unknown };
+    };
+    const consumed = out.engine.bytesWritten;
+    if (typeof consumed === 'number' && Number.isInteger(consumed) && consumed > 0 && start + consumed <= limit) {
+      return { data: out.buffer, end: start + consumed };
+    }
+  } catch {
+    // Fall through to the binary search below.
+  }
   const data = inflateSync(pack.subarray(start, limit));
   let lo = start + 1;
   let hi = limit;
