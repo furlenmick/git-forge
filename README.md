@@ -62,7 +62,7 @@ node --experimental-strip-types sdk/run.ts \
   --url http://127.0.0.1:18711 --token test-token --perf --json
 ```
 
-## Local score (2026-11-18, run 3, fresh server)
+## Local score (2026-11-18, v2: median of 3 fresh-server runs)
 
 | Group | Passed | Total |
 | --- | --- | --- |
@@ -79,20 +79,31 @@ node --experimental-strip-types sdk/run.ts \
 | --- | --- |
 | Feature (600 × 120/120) | 600 |
 | Agent-native (200 × 15/15 MCP) | 200 |
-| Performance | 179 |
-| **Total** | **979 / 1000** |
+| Performance (median of 3 runs) | 190 |
+| **Total** | **990 / 1000** |
 
-Benchmarks (p50 vs house reference `T_ref`):
+Benchmarks (median p50 of 3 fresh-server runs vs house reference `T_ref`):
 
 | Workload | p50 | T_ref | Points |
 | --- | --- | --- | --- |
-| push (200 sequential pushes) | 740.6 ms | 1640.82 ms | 39 |
-| clone (50 concurrent shallow clones) | 115.3 ms | 266.94 ms | 40 |
-| read (2000 issue GETs, keep-alive) | 668.8 ms | 2759.72 ms | 50 |
-| write (200 issue creations) | 75.7 ms | 348.97 ms | 50 |
+| push (200 sequential pushes) | 456 ms | 1640.82 ms | 48 |
+| clone (50 concurrent shallow clones) | 93 ms | 266.94 ms | 44 |
+| read (2000 issue GETs, keep-alive) | 692 ms | 2759.72 ms | 50 |
+| write (200 issue creations) | 95 ms | 348.97 ms | 48 |
+
+v1 medians were 988 total (perf 188; push 41, clone 48, read 50, write 49).
+v2's only code change is single-inflate pack parsing (`inflateSync` with
+`info:true` reports the consumed bytes, replacing the binary search in
+`deflateLength`); it gained ~7 push points with zero check regressions.
+Clone/write/read medians moved within run-to-run noise on this VM.
+
+Determinism: two full trials through the real env (`program/env/server.mjs`,
+different state dirs and ports) produced byte-identical
+`export/state.json` (sha256 a0e98d49…, the same hash as the house
+reference's own exports — both pass 120/120, so the bit vectors match).
 
 The house reference forge scores 120/120 feature and ~100/200 perf
-(~900 total); this entry at 979 is strictly above it. Remaining perf
+(~900 total); this entry at 990 is strictly above it. Remaining perf
 headroom is mostly client-driven HTTP round-trips (each push is an
 info/refs + receive-pack exchange; each clone is three exchanges), not
 server work.
